@@ -29,6 +29,7 @@ from lxml import etree
 from docx import Document
 import mobi
 import pandas as pd
+from opencc import OpenCC
 
 
 def get_docx_title(docx_filename):
@@ -139,6 +140,7 @@ endpage = config.getint('option', 'endpage', fallback=-1)
 transliteration_list_file = config.get('option', 'transliteration-list')
 # 译名表替换是否开启大小写匹配？
 case_matching = config.get('option', 'case-matching')
+gpt_model = config.get('option', 'gpt_model')
 
 # 设置openai的API密钥
 openai.api_key = openai_apikey
@@ -149,7 +151,7 @@ key_array = openai_apikey.split(',')
 def random_api_key():
     return random.choice(key_array)
 
-def create_chat_completion(prompt, text, model="gpt-3.5-turbo", **kwargs):
+def create_chat_completion(prompt, text, model=gpt_model, **kwargs):
     openai.api_key = random_api_key()
     return openai.ChatCompletion.create(
         model=model,
@@ -273,21 +275,35 @@ def convert_pdf_to_text(pdf_filename, start_page=1, end_page=-1):
         text = pdfminer.high_level.extract_text(pdf_filename, page_numbers=list(range(start_page - 1, end_page)))
     return text
 
+text_length = 0
 
-# 将文本分成不大于1024字符的短文本list
+# 将文本分成不大于4096字符的短文本list
 def split_text(text):
+
+    global text_length
+    text_length = len(text)
+
     sentence_list = re.findall(r'.+?[。！？!?.]', text)
 
     # 初始化短文本列表
     short_text_list = []
     # 初始化当前短文本
     short_text = ""
+    limit_length = 1800
+    if gpt_model == "gpt-3.5-turbo-16k" :
+        limit_length = limit_length * 4
+    elif gpt_model == "gpt-4" :
+        limit_length = limit_length * 2
+    elif gpt_model == "gpt-4-32k" :
+        limit_length = limit_length * 8
+
+
     # 遍历句子列表
     for s in sentence_list:
-        # 如果当前短文本加上新的句子长度不大于1024，则将新的句子加入当前短文本
-        if len(short_text + s) <= 1024:
+        # 如果当前短文本加上新的句子长度不大于(4096)，则将新的句子加入当前短文本
+        if len(short_text + s) <= limit_length :
             short_text += s
-        # 如果当前短文本加上新的句子长度大于1024，则将当前短文本加入短文本列表，并重置当前短文本为新的句子
+        # 如果当前短文本加上新的句子长度大于(4096)，则将当前短文本加入短文本列表，并重置当前短文本为新的句子
         else:
             short_text_list.append(short_text)
             short_text = s
@@ -305,12 +321,18 @@ def return_text(text):
 
 
 # Initialize a count variable of tokens cost.
-cost_tokens = 0
+cost_prompt_tokens = 0
+cost_completion_tokens = 0
 
+
+# 簡繁轉譯工具
+cc = OpenCC('s2twp')
 
 # 翻译短文本
 def translate_text(text):
-    global cost_tokens
+
+    global cost_prompt_tokens
+    global cost_completion_tokens
 
     # 调用openai的API进行翻译
     try:
@@ -323,7 +345,8 @@ def translate_text(text):
             .decode()
         )
         # Get the token usage from the API response
-        cost_tokens += completion["usage"]["total_tokens"]
+        cost_prompt_tokens += completion["usage"]["prompt_tokens"]
+        cost_completion_tokens += completion["usage"]["completion_tokens"]
 
     except Exception as e:
         import time
@@ -341,9 +364,12 @@ def translate_text(text):
             .decode()
         )
         # Get the token usage from the API response
-        cost_tokens += completion["usage"]["total_tokens"]
+        cost_prompt_tokens += completion["usage"]["prompt_tokens"]
+        cost_completion_tokens += completion["usage"]["completion_tokens"]
 
-    return t_text
+    tw_text = cc.convert(t_text)
+
+    return tw_text
 
 
 def translate_and_store(text):
@@ -501,7 +527,7 @@ else:
     if args.tlist:
         text = text_replace(text, transliteration_list_file, case_matching)
 
-    # 将文本分成不大于1024字符的短文本list
+    # 将文本分成不大于(4096)字符的短文本list
     short_text_list = split_text(text)
     if args.test:
         short_text_list = short_text_list[:3]
@@ -531,8 +557,24 @@ else:
     # 将翻译后的文本同时写入txt文件 in case epub插件出问题
     with open(new_filenametxt, "w", encoding="utf-8") as f:
         f.write(translated_text)
-cost = cost_tokens / 1000 * 0.002
-print(f"Translation completed. Total cost: {cost_tokens} tokens, ${cost}.")
+
+cost_prompt_tokens_rate = 0.0015
+cost_completion_tokens_rate = 0.002
+
+if gpt_model == "gpt-3.5-turbo-16k" :
+    cost_prompt_tokens_rate = 0.003
+    cost_completion_tokens_rate = 0.004
+elif gpt_model == "gpt-4" :
+    cost_prompt_tokens_rate = 0.03
+    cost_completion_tokens_rate = 0.06
+elif gpt_model == "gpt-4-32k" :
+    cost_prompt_tokens_rate = 0.06
+    cost_completion_tokens_rate = 0.12
+
+
+cost = ( cost_prompt_tokens / 1000 * cost_prompt_tokens_rate ) + ( cost_completion_tokens / 1000 * cost_completion_tokens_rate )
+print(f" {text_length} characters translation completed, model select: {gpt_model}.")
+print(f"Total cost: {cost_prompt_tokens} prompt tokens, {cost_completion_tokens} completion tokens, ${cost}.")
 
 try:
     os.remove(jsonfile)
