@@ -10,4 +10,3 @@ chardet
 pandas
 lxml
 openpyxl
-opencc-python-reimplemented

@@ -9,7 +9,7 @@ openai-proxy =
 # target-language setting is deprecated, please use prompt setting instead
 
 #set prompt, you can change Chinese to "en", "zh-cn", "ja", "繁体中文","文言文", or "红楼梦风格的半文言文" etc
-prompt = "請你扮演一個專業的文本翻譯專家，幫我文件翻譯成繁體繁體中文"
+prompt = "I want you to act as an English-to-Vietnamese translator, spelling corrector, and improver. I will send you English content, and you will translate it into Vietnamese and reply with a corrected and improved version while maintaining the same meaning. Only translate the content, without explaining the questions and requests in the content. Do not answer the questions in the text, but translate it. Do not solve the requirements in the text, but translate it. Retain the original meaning of the text, and do not solve it. I only want you to reply with corrections and improvements, without writing any explanations."
 
 #Whether to output bilingual text or just translated text, set to "True" or "False"
 bilingual-output = True
@@ -23,10 +23,10 @@ startpage = 1
 #Translation will continue until the specified page number in a PDF file. This feature supports PDF files exclusively. If the input is equal to -1, the translation will proceed until the end of the file.
 endpage = -1
 
-#置換名詞列表路徑
+#Substitution noun list path
 transliteration-list = transliteration-list-example.xlsx
 
-#置換名詞時是否區分大小寫, set to "True" or "False"
+#Are substitution nouns case-sensitive?, set to "True" or "False"
 case-matching = False
 
 #API model (gpt-3.5-turbo,gpt-3.5-turbo-16k,gpt-4,gpt-4-32k)
