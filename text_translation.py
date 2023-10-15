@@ -228,19 +228,22 @@ def split_text(text):
 
     # Traverse the sentence list.
     for s in sentence_list:
-        # 如果当前短文本加上新的句子长度不大于(4096)，则将新的句子加入当前短文本
+        # If the length of the current short text,
+        # when combined with the length of the new sentence does not exceed 4096 characters,
+        # add the new sentence to the current short text.
         if len(short_text + s) <= limit_length:
             short_text += s
-        # 如果当前短文本加上新的句子长度大于(4096)，则将当前短文本加入短文本列表，并重置当前短文本为新的句子
+        # If the current short text, when combined with the length of the new sentence, exceeds 4096 characters,
+        # add the current short text to the list of short texts and reset the current short text to the new sentence.
         else:
             short_text_list.append(short_text)
             short_text = s
-    # 将最后的短文本加入短文本列表
+    # Add the last short text to the list of short texts.
     short_text_list.append(short_text)
     return short_text_list
 
 
-# 将句号替换为句号+回车
+# Replace the period with a period followed by a line break.
 def return_text(text):
     text = text.replace(". ", ".\n")
     text = text.replace("。", "。\n")
@@ -248,12 +251,12 @@ def return_text(text):
     return text
 
 
-# 翻译短文本
+# Translate text
 def translate_text(text):
     global cost_prompt_tokens
     global cost_completion_tokens
 
-    # 调用openai的API进行翻译
+    # Invoke the OpenAI API for translation.
     try:
         completion = create_chat_completion(prompt, text)
         t_text = (
@@ -292,15 +295,14 @@ def translate_text(text):
 
 
 def translate_and_store(text):
-    # 如果文本已经翻译过，直接返回翻译结果
+    # If the text has already been translated, simply return the translated result.
     if text in translated_dict:
         return translated_dict[text]
 
-    # 否则，调用 translate_text 函数进行翻译，并将结果存储在字典中
+    # Otherwise, call the translate_text function for translation and store the results in a dictionary.
     translated_text = translate_text(text)
     translated_dict[text] = translated_text
 
-    # 将字典保存为 JSON 文件
     with open(jsonfile, "w", encoding="utf-8") as f:
         json.dump(translated_dict, f, ensure_ascii=False, indent=4)
 
@@ -308,24 +310,23 @@ def translate_and_store(text):
 
 
 def text_replace(long_string, xlsx_path, case_sensitive):
-    # 读取excel文件，将第一列和第二列分别存为两个列表
+    # Read the excel file and save the first column and the second column as two separate lists.
     df = pd.read_excel(xlsx_path)
     old_words = df.iloc[:, 0].tolist()
     new_words = df.iloc[:, 1].tolist()
-    # 对旧词列表按照长度降序排序，并同步调整新词列表
+    # Sort the old word list in descending order of length and adjust the new word list accordingly.
     old_words, new_words = zip(*sorted(zip(old_words, new_words), key=lambda x: len(x[0]), reverse=True))
-    # 遍历两个列表，对字符串进行替换
+    # Iterate through both lists and perform string replacements.
     for i in range(len(old_words)):
-        # 如果不区分大小写，就将字符串和被替换词都转为小写
+        # If case sensitivity is not required, convert both the string and the replacement word to lowercase.
         if not case_sensitive:
             lower_string = long_string.lower()
             lower_old_word = old_words[i].lower()
-            # 使用正则表达式进行替换，注意要保留原字符串的大小写
+            # Use regular expressions for replacement, ensuring to preserve the original case of the string.
             long_string = re.sub(r"\b" + lower_old_word + r"\b", new_words[i], long_string, flags=re.IGNORECASE)
-        # 如果区分大小写，就直接使用正则表达式进行替换
+        # If case sensitivity is required, directly use regular expressions for replacement.
         else:
             long_string = re.sub(r"\b" + old_words[i] + r"\b", new_words[i], long_string)
-    # 返回替换后的字符串
     return long_string
 
 
@@ -394,7 +395,7 @@ if __name__ == "__main__":
 
     text = ""
 
-    # 根据文件类型调用相应的函数
+    # Invoke the corresponding function based on the file type.
     if filename.endswith('.pdf'):
         print("Converting PDF to text")
         title = get_pdf_title(filename)
@@ -430,14 +431,14 @@ if __name__ == "__main__":
         print("Unsupported file type")
 
     if filename.endswith('.epub'):
-        # 获取所有章节
+        # Retrieve all chapters.
         items = book.get_items()
 
-        # 遍历所有章节
+        # Iterate through all chapters.
         translated_all = ''
         count = 0
         for item in tqdm(items):
-            # 如果章节类型为文档类型，则需要翻译
+            # If the chapter type is a document type, it needs to be translated.
             if item.get_type() == ebooklib.ITEM_DOCUMENT:
                 # Extract the original text using BeautifulSoup.
                 soup = BeautifulSoup(item.get_content(), 'html.parser')
@@ -449,7 +450,7 @@ if __name__ == "__main__":
                 # If the original text is empty, skip it.
                 if not text:
                     continue
-                # 将所有回车替换为空格
+                # Replace all line breaks with spaces.
                 text = text.replace("\n", " ")
                 text = re.sub(r"\s+", " ", text)
 
