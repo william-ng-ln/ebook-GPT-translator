@@ -1,27 +1,29 @@
 # -*- coding: utf-8 -*-
 
-import pdfminer.high_level
 import openai
 from tqdm import tqdm
 import ebooklib
 from ebooklib import epub
 import os
-import tempfile
 from bs4 import BeautifulSoup
 import configparser
-from pdfminer.pdfdocument import PDFDocument
-from pdfminer.pdfparser import PDFParser
-from pdfminer.pdfpage import PDFPage
 import random
 import json
-import docx
-import zipfile
-from lxml import etree
-import mobi
 import pandas as pd
 import chardet
 import argparse
 import re
+from retry import retry
+import logging
+
+# Create a logger instance
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 # Initialize a count variable of tokens cost.
 cost_prompt_tokens = 0
@@ -29,73 +31,30 @@ cost_completion_tokens = 0
 text_length = 0
 gpt_model = ""
 
+with open('settings.cfg', 'rb') as f:
+    content = f.read()
+    encoding = chardet.detect(content)['encoding']
 
-def get_docx_title(docx_filename):
-    with zipfile.ZipFile(docx_filename) as zf:
-        core_properties = etree.fromstring(zf.read("docProps/core.xml"))
+with open('settings.cfg', encoding=encoding) as f:
+    config_text = f.read()
+    config = configparser.ConfigParser()
+    config.read_string(config_text)
 
-    ns = {"cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
-          "dc": "http://purl.org/dc/elements/1.1/",
-          "dcterms": "http://purl.org/dc/terms/",
-          "dcmitype": "http://purl.org/dc/dcmitype/",
-          "xsi": "http://www.w3.org/2001/XMLSchema-instance"}
-
-    title_elements = core_properties.findall("dc:title", ns)
-    if title_elements:
-        return title_elements[0].text
-    else:
-        return "Unknown title"
-
-
-def get_pdf_title(pdf_filename):
-    try:
-        with open(pdf_filename, 'rb') as file:
-            parser = PDFParser(file)
-            document = PDFDocument(parser)
-            if 'Title' in document.info:
-                return document.info['Title']
-            else:
-                text = pdfminer.high_level.extract_text(file)
-                match = re.search(r'(?<=\n)([^\n]+)(?=\n)', text)
-                if match:
-                    return match.group(1)
-                else:
-                    return "Unknown title"
-    except:
-        return "Unknown title"
-
-
-def get_mobi_title(mobi_filename):
-    try:
-        metadata = mobi.read_metadata(mobi_filename)
-        title = metadata.get("Title", None)
-    except:
-        return "Unknown title"
-
-
-def convert_mobi_to_text(mobi_filename):
-    # Extract MOBI contents to a temporary directory
-    with tempfile.TemporaryDirectory() as tempdir:
-        tempdir, filepath = mobi.extract(mobi_filename)
-
-        # Find the HTML file in the temporary directory
-        for root, _, files in os.walk(tempdir):
-            for file in files:
-                if file.endswith(".html"):
-                    html_file = os.path.join(root, file)
-                    break
-            else:
-                continue
-            break
-        else:
-            raise FileNotFoundError("HTML file not found in the extracted MOBI contents")
-
-        # Parse the HTML file with BeautifulSoup to get the text
-        with open(html_file, "r", encoding="utf-8") as f:
-            soup = BeautifulSoup(f.read(), "html.parser")
-            text = soup.get_text()
-
-    return text
+# Obtain OpenAI API key and language.
+openai_apikey = config.get('option', 'openai-apikey')
+# language_name = config.get('option', 'target-language')
+prompt = config.get('option', 'prompt')
+bilingual_output = config.get('option', 'bilingual-output')
+language_code = config.get('option', 'langcode')
+api_proxy = config.get('option', 'openai-proxy')
+# Get startpage and endpage as integers with default values
+startpage = config.getint('option', 'startpage', fallback=1)
+endpage = config.getint('option', 'endpage', fallback=-1)
+# Set the translated name table file path.
+transliteration_list_file = config.get('option', 'transliteration-list')
+# Is case-sensitive matching enabled in the translated name table replacement?
+case_matching = config.get('option', 'case-matching')
+gpt_model = config.get('option', 'gpt_model')
 
 
 def get_epub_title(epub_filename):
@@ -115,28 +74,25 @@ def random_api_key():
     return random.choice(key_array)
 
 
-def create_chat_completion(prompt, text, model=gpt_model, **kwargs):
-    openai.api_key = random_api_key()
+@retry(delay=30, jitter=10, logger=logger)
+def create_chat_completion(text, prompt=prompt, model=gpt_model, **kwargs):
+    # openai.api_key = random_api_key()
     return openai.ChatCompletion.create(
         model=model,
         messages=[
             {
-                "role": "user",
-                "content": f"{prompt}: \n{text}",
-            }
+                "role": "system",
+                "content": f"{prompt}",
+            },
+            {"role": "user", "content": f"{text}"}
         ],
+        # temperature=1,
+        # # max_tokens=256,
+        # top_p=1,
+        # frequency_penalty=0,
+        # presence_penalty=0,
         **kwargs
     )
-
-
-def convert_docx_to_text(docx_filename):
-    doc = docx.Document(docx_filename)
-
-    text = ""
-    for paragraph in doc.paragraphs:
-        text += paragraph.text + "\n"
-
-    return text
 
 
 def convert_epub_to_text(epub_filename):
@@ -184,27 +140,6 @@ def text_to_epub(text, filename, language_code='en', title="Title"):
 
     # Write the epub file
     epub.write_epub(filename, book, {})
-
-
-# Convert PDF file to text.
-# For PDF files
-def get_total_pages(pdf_filename):
-    with open(pdf_filename, 'rb') as file:
-        parser = PDFParser(file)
-        document = PDFDocument(parser)
-        return len(list(PDFPage.create_pages(document)))
-
-
-def convert_pdf_to_text(pdf_filename, start_page=1, end_page=-1):
-    if end_page == -1:
-        end_page = get_total_pages(pdf_filename)
-        # print("Total pages of the file:"+ str(end_page))
-        # print("Converting PDF from:"+ str(start_page)+" to "+ str(end_page) + " page")
-        text = pdfminer.high_level.extract_text(pdf_filename, page_numbers=list(range(start_page - 1, end_page)))
-    else:
-        # print("Converting PDF from:"+ str(start_page)+" to "+ str(end_page) + " page")
-        text = pdfminer.high_level.extract_text(pdf_filename, page_numbers=list(range(start_page - 1, end_page)))
-    return text
 
 
 # Split the text into a list of short texts, each no more than 4096 characters.
@@ -257,39 +192,17 @@ def translate_text(text):
     global cost_completion_tokens
 
     # Invoke the OpenAI API for translation.
-    try:
-        completion = create_chat_completion(prompt, text)
-        t_text = (
-            completion["choices"][0]
-            .get("message")
-            .get("content")
-            .encode("utf8")
-            .decode()
-        )
-        # Get the token usage from the API response
-        cost_prompt_tokens += completion["usage"]["prompt_tokens"]
-        cost_completion_tokens += completion["usage"]["completion_tokens"]
-
-    except Exception as e:
-        import time
-        # TIME LIMIT for open api please pay
-        sleep_time = 60
-        time.sleep(sleep_time)
-        print(e, f"will sleep  {sleep_time} seconds")
-
-        completion = create_chat_completion(prompt, text)
-        t_text = (
-            completion["choices"][0]
-            .get("message")
-            .get("content")
-            .encode("utf8")
-            .decode()
-        )
-        # Get the token usage from the API response
-        cost_prompt_tokens += completion["usage"]["prompt_tokens"]
-        cost_completion_tokens += completion["usage"]["completion_tokens"]
-
-    # tw_text = cc.convert(t_text)
+    completion = create_chat_completion(text)
+    t_text = (
+        completion["choices"][0]
+        .get("message")
+        .get("content")
+        .encode("utf8")
+        .decode()
+    )
+    # Get the token usage from the API response
+    cost_prompt_tokens += completion["usage"]["prompt_tokens"]
+    cost_completion_tokens += completion["usage"]["completion_tokens"]
 
     return t_text
 
@@ -332,31 +245,6 @@ def text_replace(long_string, xlsx_path, case_sensitive):
 
 if __name__ == "__main__":
 
-    with open('settings.cfg', 'rb') as f:
-        content = f.read()
-        encoding = chardet.detect(content)['encoding']
-
-    with open('settings.cfg', encoding=encoding) as f:
-        config_text = f.read()
-        config = configparser.ConfigParser()
-        config.read_string(config_text)
-
-    # Obtain OpenAI API key and language.
-    openai_apikey = config.get('option', 'openai-apikey')
-    # language_name = config.get('option', 'target-language')
-    prompt = config.get('option', 'prompt')
-    bilingual_output = config.get('option', 'bilingual-output')
-    language_code = config.get('option', 'langcode')
-    api_proxy = config.get('option', 'openai-proxy')
-    # Get startpage and endpage as integers with default values
-    startpage = config.getint('option', 'startpage', fallback=1)
-    endpage = config.getint('option', 'endpage', fallback=-1)
-    # Set the translated name table file path.
-    transliteration_list_file = config.get('option', 'transliteration-list')
-    # Is case-sensitive matching enabled in the translated name table replacement?
-    case_matching = config.get('option', 'case-matching')
-    gpt_model = config.get('option', 'gpt_model')
-
     # Set the OpenAI API key.
     openai.api_key = openai_apikey
 
@@ -364,12 +252,12 @@ if __name__ == "__main__":
     key_array = openai_apikey.split(',')
 
     # If the configuration file is written, set the API proxy.
-    if len(api_proxy) == 0:
-        print("OpenAI API proxy not detected, the current API address in use is: " + openai.api_base)
-    else:
-        api_proxy_url = api_proxy + "/v1"
-        openai.api_base = os.environ.get("OPENAI_API_BASE", api_proxy_url)
-        print("Using OpenAI API proxy, the proxy address is: " + openai.api_base)
+    # if len(api_proxy) == 0:
+    #     print("OpenAI API proxy not detected, the current API address in use is: " + openai.api_base)
+    # else:
+    #     api_proxy_url = api_proxy + "/v1"
+    #     openai.api_base = os.environ.get("OPENAI_API_BASE", api_proxy_url)
+    #     print("Using OpenAI API proxy, the proxy address is: " + openai.api_base)
 
     # Create argument parser.
     parser = argparse.ArgumentParser()
@@ -395,15 +283,7 @@ if __name__ == "__main__":
 
     text = ""
 
-    # Invoke the corresponding function based on the file type.
-    if filename.endswith('.pdf'):
-        print("Converting PDF to text")
-        title = get_pdf_title(filename)
-        with tqdm(total=10, desc="Converting PDF to text") as pbar:
-            for i in range(10):
-                text = convert_pdf_to_text(filename, startpage, endpage)
-                pbar.update(1)
-    elif filename.endswith('.epub'):
+    if filename.endswith('.epub'):
         print("Converting epub to text")
         book = epub.read_epub(filename)
     elif filename.endswith('.txt'):
@@ -412,21 +292,6 @@ if __name__ == "__main__":
             text = file.read()
 
         title = os.path.basename(filename)
-    elif filename.endswith('.docx'):
-        print("Converting DOCX file to text")
-        title = get_docx_title(filename)
-        with tqdm(total=10, desc="Converting DOCX to text") as pbar:
-            for i in range(10):
-                text = convert_docx_to_text(filename)
-                pbar.update(1)
-
-    elif filename.endswith('.mobi'):
-        print("Converting MOBI file to text")
-        title = get_mobi_title(filename)
-        with tqdm(total=10, desc="Converting MOBI to text") as pbar:
-            for i in range(10):
-                text = convert_mobi_to_text(filename)
-                pbar.update(1)
     else:
         print("Unsupported file type")
 
